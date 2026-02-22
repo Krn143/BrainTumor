@@ -29,14 +29,12 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 2. GRAD-CAM CORE LOGIC ---
-# --- 2. THE NOTEBOOK-EXACT XAI FUNCTION ---
 def get_gradcam(model, input_tensor):
-    """Exactly matches the notebook logic provided by user."""
     features = []
     def hook_feature(module, input, output):
         features.append(output)
     
-    # Target layer from your architecture
+    # Using the last block norm for spatial information
     target_layer = model.blocks[-1].norm1
     handle = target_layer.register_forward_hook(hook_feature)
     
@@ -46,25 +44,33 @@ def get_gradcam(model, input_tensor):
     target_class = output.argmax(dim=1).item()
     output[0, target_class].backward()
     
-    # Extracting weights based on your notebook's dim=1 logic
-    # weights shape matches your ViT-Tiny 192 features
-    weights = torch.mean(features[0], dim=1).squeeze().cpu().data.numpy()
+    # --- TRANSFORMER SPATIAL EXTRACTION ---
+    # features[0] shape for ViT-Tiny: [1, 197, 192]
+    # index 0 is the CLS token, indices 1-197 are the 196 patches (14x14)
+    patch_features = features[0][0, 1:, :] # Shape: [196, 192]
     
-    # Reshaping 192 features to 14x14 grid (196 patches)
-    # We take the 192 available values and pad/adjust to 196 for the grid
-    heatmap_values = np.zeros(196)
-    heatmap_values[:len(weights)] = weights
-    heatmap = heatmap_values.reshape(14, 14)
+    # Average across the embedding dimension (dim=1 here) to get 196 values
+    # This represents the importance of each spatial patch
+    weights = torch.mean(patch_features, dim=1).cpu().data.numpy() # Shape: (196,)
     
+    # Reshape the 196 patches into a 14x14 grid
+    heatmap = weights.reshape(14, 14)
+    
+    # Apply ReLU to keep only positive contributions
     heatmap = np.maximum(heatmap, 0)
+    
+    # Normalize the heatmap
     if np.max(heatmap) > 0:
         heatmap /= np.max(heatmap)
     
+    # Resize to match the 224x224 input image size
     heatmap = cv2.resize(heatmap, (224, 224))
     heatmap = np.uint8(255 * heatmap)
     
     handle.remove()
-    return heatmap, target_class, torch.softmax(output, dim=1)[0, target_class].item()
+    
+    confidence = torch.softmax(output, dim=1)[0, target_class].item()
+    return heatmap, target_class, confidence
 # --- 3. MODEL & DATA HELPERS ---
 @st.cache_resource
 def load_vision_engine():
