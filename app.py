@@ -1,55 +1,93 @@
 import streamlit as st
 import torch
-import cv2
-from PIL import Image
 import numpy as np
+from PIL import Image
+from torchvision import transforms
+from model_architecture import get_medsight_hex_model
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
-# --- 1. PAGE SETUP (Medsight Style) ---
-st.set_page_config(page_title="MedSight-Hex: Brain Tumor AI", layout="wide")
-st.title("🧠 MedSight-Hex: Hyperbolic Medical Imaging")
-st.sidebar.image("https://cdn-icons-png.flaticon.com/512/2491/2491210.png", width=100)
-st.sidebar.title("Diagnostic Control")
+# --- 1. CONFIGURATION ---
+st.set_page_config(page_title="MedSight-Hex", layout="wide", page_icon="🧠")
+CLASS_NAMES = ['glioma', 'meningioma', 'no_tumor', 'pituitary']
 
-# --- 2. THE VISION ENGINE (HexFormer) ---
+# --- 2. MODEL LOADING ---
 @st.cache_resource
-def load_vision_engine():
-    # Load your HexFormer_Final_Presentation.pth here
-    return "HexFormer Loaded"
+def load_models():
+    # Load Vision Model
+    vision_model = get_medsight_hex_model()
+    # Loading the weights you saved from Kaggle
+    state_dict = torch.load("HexFormer_BrainTumor_Final_96_on_val.pth", map_location='cpu')
+    vision_model.load_state_dict(state_dict)
+    vision_model.eval()
+    
+    # Load MedGemma (Using 2b for Streamlit Cloud memory limits)
+    model_id = "google/gemma-2-2b-it"
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    llm_model = AutoModelForCausalLM.from_pretrained(
+        model_id, 
+        torch_dtype=torch.float16, 
+        device_map="auto"
+    )
+    return vision_model, tokenizer, llm_model
 
-# --- 3. THE INTERFACE ---
-uploaded_file = st.sidebar.file_uploader("Upload T1-weighted MRI", type=['jpg', 'jpeg', 'png'])
+# Initialize models
+try:
+    vision_engine, m_tokenizer, medgemma = load_models()
+except Exception as e:
+    st.error(f"Error loading models: {e}. Ensure you have accepted the Gemma license on HuggingFace.")
+
+# --- 3. TRANSFORMS ---
+test_transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+
+# --- 4. USER INTERFACE ---
+st.title("🧠 MedSight-Hex: Advanced Brain Tumor Diagnostic System")
+st.markdown("---")
+
+uploaded_file = st.file_uploader("Upload T1-weighted MRI Scan", type=['jpg', 'jpeg', 'png'])
 
 if uploaded_file:
     col1, col2 = st.columns([1, 1])
     
+    # Process Image
+    img = Image.open(uploaded_file).convert('RGB')
+    input_tensor = test_transform(img).unsqueeze(0)
+    
     with col1:
-        st.subheader("🖼️ Vision & Localization")
-        img = Image.open(uploaded_file).convert('RGB')
+        st.subheader("🖼️ Vision Analysis")
+        st.image(img, caption="Uploaded MRI", use_column_width=True)
         
-        # DISPLAY ORIGINAL AND HEATMAP
-        # In Medsight, they show the image; we show the Image + Grad-CAM Heatmap
-        st.image(img, caption="Patient MRI", use_column_width=True)
-        st.info("AI Analysis: GLIOMA Detected with 96.6% Confidence")
+        # Run Vision Prediction
+        with torch.no_grad():
+            output = vision_engine(input_tensor)
+            prob = torch.nn.functional.softmax(output, dim=1)
+            conf, pred_idx = torch.max(prob, 1)
+            
+        label = CLASS_NAMES[pred_idx.item()]
+        confidence = conf.item() * 100
         
-    with col2:
-        st.subheader("📜 MedGemma Clinical Interpretation")
-        with st.spinner("MedGemma is analyzing findings..."):
-            # This is where we trigger our MedGemma Expert Prompt
-            report = """
-            **CASE SUMMARY:** The HexFormer model identifies an irregular mass in the left temporal lobe. 
-            The Lorentzian manifold distance suggests high tissue-density variation.
-            
-            **NEURORADIOLOGIST INSIGHT:**
-            This finding is consistent with a high-grade Glioma. There is evidence 
-            of surrounding edema. 
-            
-            **RECOMMENDATION:**
-            1. Urgent neurosurgical consultation.
-            2. Follow-up with T2-FLAIR and Contrast-enhanced MRI.
-            """
-            st.markdown(report)
-            st.warning("Note: This is an AI-assisted tool. Please consult a human radiologist.")
+        st.success(f"Prediction: {label.upper()} ({confidence:.2f}%)")
 
-# --- 4. GOOGLE CLOUD DEPLOYMENT FOOTER ---
+    with col2:
+        st.subheader("📜 Patient-Friendly Report")
+        with st.spinner("Generating clinical summary..."):
+            # MedGemma Prompt for Laypeople
+            prompt = f"""
+            Explain a brain MRI result to a patient. 
+            Result: {label} with {confidence:.2f}% certainty.
+            Explain what this is simply, what the AI saw, and what they should do next.
+            Do not use medical jargon.
+            """
+            
+            inputs = m_tokenizer(prompt, return_tensors="pt")
+            outputs = medgemma.generate(**inputs, max_new_tokens=250)
+            report = m_tokenizer.decode(outputs[0], skip_special_tokens=True)
+            
+            st.write(report.replace(prompt, "").strip())
+
 st.sidebar.markdown("---")
-st.sidebar.info("Deployed on **Google Cloud Vertex AI**")
+st.sidebar.write("Developed by: Karan Sanjay Rathod")
+st.sidebar.write("Architecture: HexFormer-Hybrid")
