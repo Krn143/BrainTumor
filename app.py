@@ -37,7 +37,7 @@ def get_gradcam(model, input_tensor):
     def save_activation(module, input, output): activations.append(output)
     def save_gradient(module, grad_input, grad_output): gradients.append(grad_output[0])
 
-    # Target the final normalization layer of the transformer blocks
+    # Target the final normalization layer
     target_layer = model.blocks[-1].norm1
     h_a = target_layer.register_forward_hook(save_activation)
     h_g = target_layer.register_full_backward_hook(save_gradient)
@@ -48,20 +48,30 @@ def get_gradcam(model, input_tensor):
     output[:, pred_idx].backward()
 
     # Process gradients and activations for ViT visualization
-    grads = gradients[0].cpu().data.numpy()
-    acts = activations[0].cpu().data.numpy()
+    grads = gradients[0].cpu().data.numpy() # Shape: (1, Seq_Len, Dim)
+    acts = activations[0].cpu().data.numpy()  # Shape: (1, Seq_Len, Dim)
     
     h_a.remove()
     h_g.remove()
 
-    weights = np.mean(grads, axis=(1, 2))
-    cam = np.zeros(acts.shape[1:], dtype=np.float32)
-    for i, w in enumerate(weights[0]):
-        cam += w * acts[0, i]
+    # ViT Fix: Remove the class token (usually index 0) and reshape
+    # Sequence length for 224x224 images with 16x16 patches is 14x14=196 (+1 class token)
+    weights = np.mean(grads, axis=2) # Average over the feature dimension
+    
+    # We ignore the class token (index 0) and take the rest (196 patches)
+    cam_weights = weights[0, 1:] 
+    cam_acts = acts[0, 1:, :] 
+    
+    # Weight the activations
+    cam = np.dot(cam_acts, cam_weights)
+    
+    # Reshape the 196 patches back into a 14x14 grid
+    cam = cam.reshape(14, 14)
 
-    cam = np.maximum(cam, 0)
+    cam = np.maximum(cam, 0) # ReLU
     cam = cv2.resize(cam, (224, 224))
     cam = (cam - np.min(cam)) / (np.max(cam) - np.min(cam) + 1e-10)
+    
     return cam, pred_idx.item(), torch.softmax(output, dim=1)[0, pred_idx].item()
 
 # --- 3. MODEL & DATA HELPERS ---
