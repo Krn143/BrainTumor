@@ -30,48 +30,42 @@ st.markdown("""
 
 # --- 2. GRAD-CAM CORE LOGIC ---
 def get_gradcam(model, input_tensor):
-    """Calculates heatmaps using the exact spatial token mapping from the notebook."""
-    activations = []
-    gradients = []
-
-    def save_activation(module, input, output): activations.append(output)
-    def save_gradient(module, grad_input, grad_output): gradients.append(grad_output[0])
-
-    # Target Layer: Last block's norm1 (This is the 'Focus' layer in your ViT)
+    """Matches the exact 'Mean Activation' logic from the research notebook."""
+    features = []
+    
+    # Hook to capture features (activations) exactly as in the notebook
+    def hook_feature(module, input, output):
+        features.append(output)
+    
+    # Targeting the last layer block as in your notebook
     target_layer = model.blocks[-1].norm1
-    h_a = target_layer.register_forward_hook(save_activation)
-    h_g = target_layer.register_full_backward_hook(save_gradient)
-
-    model.zero_grad()
-    output = model(input_tensor)
-    _, pred_idx = torch.max(output, 1)
-    output[:, pred_idx].backward()
-
-    # Get raw activations and gradients
-    grads = gradients[0].cpu().data.numpy()[0] # (197, 192)
-    acts = activations[0].cpu().data.numpy()[0]   # (197, 192)
+    handle = target_layer.register_forward_hook(hook_feature)
     
-    h_a.remove()
-    h_g.remove()
-
-    # Logic Sync: We use the mean of gradients as weights for the features (192)
-    weights = np.mean(grads, axis=0) 
+    # Forward Pass
+    with torch.no_grad():
+        output = model(input_tensor)
+        probabilities = torch.softmax(output, dim=1)
+        conf, pred_idx = torch.max(probabilities, 1)
     
-    # Isolate spatial tokens (patches 1-196), ignoring class token (0)
-    # This creates the 14x14 spatial map used in the notebook
-    cam = np.dot(acts[1:, :], weights) 
-    cam = cam.reshape(14, 14)
-
-    # Normalization: ReLU and Min-Max scaling
-    cam = np.maximum(cam, 0)
+    # Extract features: Shape (1, 197, 192)
+    # 1. Mean across the 192-feature dimension to get token importance
+    weights = torch.mean(features[0], dim=2).squeeze().cpu().data.numpy()
     
-    # Interpolation Sync: Using INTER_LINEAR to match the smooth look in your notebook
-    cam = cv2.resize(cam, (224, 224), interpolation=cv2.INTER_LINEAR)
+    # 2. Extract spatial tokens (1 to 196), ignoring the class token (0)
+    # This creates the 14x14 grid
+    heatmap = weights[1:].reshape(14, 14)
     
-    if np.max(cam) > 0:
-        cam = (cam - np.min(cam)) / (np.max(cam) - np.min(cam))
-        
-    return cam, pred_idx.item(), torch.softmax(output, dim=1)[0, pred_idx].item()
+    # 3. Post-processing matching your notebook's logic
+    heatmap = np.maximum(heatmap, 0)
+    if np.max(heatmap) > 0:
+        heatmap /= np.max(heatmap)
+    
+    # 4. Resize and Normalize
+    heatmap = cv2.resize(heatmap, (224, 224))
+    heatmap = np.uint8(255 * heatmap)
+    
+    handle.remove()
+    return heatmap, pred_idx.item(), conf.item()
     
 # --- 3. MODEL & DATA HELPERS ---
 @st.cache_resource
