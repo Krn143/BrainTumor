@@ -9,3 +9,4 @@ transformers
 timm
 transformers>=4.40.0
 huggingface_hub
+accelerate
