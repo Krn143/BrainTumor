@@ -10,6 +10,14 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 st.set_page_config(page_title="MedSight-Hex", layout="wide", page_icon="🧠")
 CLASS_NAMES = ['glioma', 'meningioma', 'no_tumor', 'pituitary']
 
+from huggingface_hub import login
+
+# Access the secret you set in Streamlit Cloud
+if "HUGGINGFACE_TOKEN" in st.secrets:
+    login(token=st.secrets["HUGGINGFACE_TOKEN"])
+else:
+    st.error("HF_TOKEN not found in Secrets!")
+    
 # Access the secret securely
 hf_token = st.secrets["HUGGINGFACE_TOKEN"]
 # --- 2. MODEL LOADING ---
@@ -28,7 +36,7 @@ def load_models():
     llm_model = AutoModelForCausalLM.from_pretrained(
         model_id,
         token=hf_token,
-        torch_dtype=torch.float16, 
+        dtype=torch.float16, 
         device_map="auto"
     )
     return vision_model, tokenizer, llm_model
