@@ -10,6 +10,8 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 st.set_page_config(page_title="MedSight-Hex", layout="wide", page_icon="🧠")
 CLASS_NAMES = ['glioma', 'meningioma', 'no_tumor', 'pituitary']
 
+# Access the secret securely
+hf_token = st.secrets["HUGGINGFACE_TOKEN"]
 # --- 2. MODEL LOADING ---
 @st.cache_resource
 def load_models():
@@ -22,9 +24,10 @@ def load_models():
     
     # Load MedGemma (Using 2b for Streamlit Cloud memory limits)
     model_id = "google/gemma-2-2b-it"
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, token=hf_token)
     llm_model = AutoModelForCausalLM.from_pretrained(
-        model_id, 
+        model_id,
+        token=hf_token,
         torch_dtype=torch.float16, 
         device_map="auto"
     )
