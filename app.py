@@ -30,42 +30,41 @@ st.markdown("""
 
 # --- 2. GRAD-CAM CORE LOGIC ---
 # --- 2. THE NOTEBOOK-EXACT XAI FUNCTION ---
-def get_gradcam_sync(model, input_tensor):
-    """Exactly matches the notebook logic: mean across dim=1 (tokens)."""
+def get_gradcam(model, input_tensor):
+    """Exactly matches the notebook logic provided by user."""
     features = []
     def hook_feature(module, input, output):
         features.append(output)
     
-    # Target the last layer as per your notebook setup
+    # Target layer from your architecture
     target_layer = model.blocks[-1].norm1
     handle = target_layer.register_forward_hook(hook_feature)
     
-    # Forward & Backward pass to trigger gradients (as in notebook)
+    # Forward & Backward Pass
     model.zero_grad()
     output = model(input_tensor)
     target_class = output.argmax(dim=1).item()
     output[0, target_class].backward()
     
-    # EXACT NOTEBOOK LOGIC: 
-    # weights = torch.mean(features[0], dim=1).squeeze().cpu().data.numpy()
-    # Note: dim=1 is the sequence/token dimension (197 tokens)
-    weights = torch.mean(features[0], dim=1).squeeze().cpu().data.numpy() # Result: 192 features
+    # Extracting weights based on your notebook's dim=1 logic
+    # weights shape matches your ViT-Tiny 192 features
+    weights = torch.mean(features[0], dim=1).squeeze().cpu().data.numpy()
     
-    # To display this as an image, we map the 192 features back to the 14x14 spatial grid (196 patches)
-    # We take the first 196 elements to fit the 14x14 grid
-    heatmap = weights[:196].reshape(14, 14)
+    # Reshaping 192 features to 14x14 grid (196 patches)
+    # We take the 192 available values and pad/adjust to 196 for the grid
+    heatmap_values = np.zeros(196)
+    heatmap_values[:len(weights)] = weights
+    heatmap = heatmap_values.reshape(14, 14)
     
     heatmap = np.maximum(heatmap, 0)
     if np.max(heatmap) > 0:
         heatmap /= np.max(heatmap)
     
-    # Resize to match MRI dimensions
     heatmap = cv2.resize(heatmap, (224, 224))
     heatmap = np.uint8(255 * heatmap)
     
     handle.remove()
     return heatmap, target_class, torch.softmax(output, dim=1)[0, target_class].item()
-    
 # --- 3. MODEL & DATA HELPERS ---
 @st.cache_resource
 def load_vision_engine():
