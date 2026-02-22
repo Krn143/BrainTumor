@@ -1,115 +1,159 @@
 import streamlit as st
 import torch
 import numpy as np
+import cv2
 from PIL import Image
 from torchvision import transforms
 import torch.nn.functional as F
 
-# Import your custom architecture from the other file
+# Import your custom architecture
 from model_architecture import get_medsight_hex_model
 
-# --- 1. PAGE CONFIGURATION ---
-st.set_page_config(
-    page_title="MedSight-Hex | Brain Tumor AI",
-    page_icon="🧠",
-    layout="wide"
-)
+# --- 1. PAGE CONFIG & ADVANCED UI STYLING ---
+st.set_page_config(page_title="MedSight-Hex | Clinical Dashboard", layout="wide", page_icon="🧠")
 
-# --- 2. THE CLINICAL REASONING BANK (MedGemma Logic) ---
-def get_clinical_report(label, confidence):
-    """Provides expert summaries based on MedGemma's fine-tuned knowledge."""
-    reports = {
-        "glioma": f"The HexFormer-Hybrid model identifies features consistent with a **Glioma**. Given the {confidence:.2f}% confidence, immediate neurosurgical consultation is advised. These tumors often present with irregular borders and signal intensity variations on T1-weighted scans.",
-        "meningioma": f"A **Meningioma** has been detected. The AI is {confidence:.2f}% certain. These are typically slow-growing tumors arising from the meninges. Recommended next step: Contrast-enhanced MRI to evaluate dural attachment and mass effect.",
-        "pituitary": f"Evidence of a **Pituitary Tumor** detected ({confidence:.2f}%). These can affect hormone levels and visual fields. Clinical follow-up should include an endocrine workup and a formal visual field test.",
-        "no_tumor": "The AI analysis indicates **No Significant Pathology** or tumor mass in this scan. If clinical symptoms persist, a follow-up scan or consultation with a neurologist is recommended."
+# Custom CSS for a professional "Medical Tech" look
+st.markdown("""
+    <style>
+    .main { background-color: #0e1117; color: #ffffff; }
+    .stMetric { background-color: #1e2130; padding: 15px; border-radius: 10px; border: 1px solid #4e5d6c; }
+    .researcher-card {
+        background: linear-gradient(135deg, #1e3a8a 0%, #1e1b4b 100%);
+        padding: 20px;
+        border-radius: 15px;
+        border-left: 5px solid #3b82f6;
+        margin-bottom: 20px;
     }
-    return reports.get(label, "Analysis complete. Please consult a specialist.")
+    .status-box { padding: 10px; border-radius: 5px; margin-bottom: 10px; font-weight: bold; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- 3. MODEL LOADING (Optimized for 1GB RAM) ---
+# --- 2. GRAD-CAM CORE LOGIC ---
+def get_gradcam(model, input_tensor):
+    """Calculates the heatmaps for the Lorentzian Vision Transformer."""
+    activations = []
+    gradients = []
+
+    def save_activation(module, input, output): activations.append(output)
+    def save_gradient(module, grad_input, grad_output): gradients.append(grad_output[0])
+
+    # Target the final normalization layer of the transformer blocks
+    target_layer = model.blocks[-1].norm1
+    h_a = target_layer.register_forward_hook(save_activation)
+    h_g = target_layer.register_full_backward_hook(save_gradient)
+
+    model.zero_grad()
+    output = model(input_tensor)
+    _, pred_idx = torch.max(output, 1)
+    output[:, pred_idx].backward()
+
+    # Process gradients and activations for ViT visualization
+    grads = gradients[0].cpu().data.numpy()
+    acts = activations[0].cpu().data.numpy()
+    
+    h_a.remove()
+    h_g.remove()
+
+    weights = np.mean(grads, axis=(1, 2))
+    cam = np.zeros(acts.shape[1:], dtype=np.float32)
+    for i, w in enumerate(weights[0]):
+        cam += w * acts[0, i]
+
+    cam = np.maximum(cam, 0)
+    cam = cv2.resize(cam, (224, 224))
+    cam = (cam - np.min(cam)) / (np.max(cam) - np.min(cam) + 1e-10)
+    return cam, pred_idx.item(), torch.softmax(output, dim=1)[0, pred_idx].item()
+
+# --- 3. MODEL & DATA HELPERS ---
 @st.cache_resource
 def load_vision_engine():
-    # Load the Lorentzian ViT
     model = get_medsight_hex_model(num_classes=4)
-    # Ensure this filename matches exactly what is in your GitHub repo
     model_path = "HexFormer_BrainTumor_Final_96_on_val.pth"
-    try:
-        state_dict = torch.load(model_path, map_location=torch.device('cpu'))
-        model.load_state_dict(state_dict)
-        model.eval()
-        return model
-    except FileNotFoundError:
-        st.error(f"Error: {model_path} not found in repository. Please upload your model weights.")
-        return None
+    state_dict = torch.load(model_path, map_location='cpu')
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model
 
-# --- 4. IMAGE PRE-PROCESSING ---
-def preprocess_image(image):
+def get_report(label):
+    reports = {
+        "glioma": "Diagnostic features consistent with Glioma. Immediate neurosurgical consultation recommended.",
+        "meningioma": "Findings suggest Meningioma. Recommend contrast MRI for dural evaluation.",
+        "pituitary": "Pituitary mass detected. Standard protocol: Endocrine workup and visual field testing.",
+        "no_tumor": "No significant tumor mass detected. Monitor symptoms clinically."
+    }
+    return reports.get(label, "Consult a specialist.")
+
+# --- 4. SIDEBAR & RESEARCHER PROFILE ---
+with st.sidebar:
+    st.markdown(f"""
+        <div class="researcher-card">
+            <h3 style='margin:0; color:#60a5fa;'>👨‍🔬 Researcher</h3>
+            <p style='margin:0; font-size:1.1em;'><b>Karan Sanjay Rathod</b></p>
+            <p style='margin:0; font-size:0.8em; opacity:0.8;'>BE Computer Engineering</p>
+            <hr style='margin:10px 0; border-color:#3b82f6;'>
+            <p style='margin:0; font-size:0.9em;'><b>Project:</b> MedSight-Hex</p>
+            <p style='margin:0; font-size:0.9em;'><b>Accuracy:</b> 96.6%</p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    st.header("📂 Data Input")
+    uploaded_file = st.file_uploader("Upload MRI Scan (T1-weighted)", type=['jpg', 'png', 'jpeg'])
+    st.markdown("---")
+    st.write("🔧 **Backend:** Hyperbolic Lorentzian ViT")
+
+# --- 5. MAIN DASHBOARD ---
+vision_engine = load_vision_engine()
+
+if uploaded_file:
+    # Processing
+    raw_img = Image.open(uploaded_file).convert('RGB')
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
-    return transform(image).unsqueeze(0)
+    input_tensor = transform(raw_img).unsqueeze(0)
+    input_tensor.requires_grad = True
 
-# --- 5. MAIN INTERFACE ---
-st.title("🧠 MedSight-Hex: Advanced Brain Tumor Diagnostic System")
-st.markdown("""
-    This system utilizes a **Hyperbolic Vision Transformer (HexFormer)** with a Lorentzian Manifold head 
-    to achieve **96.6% accuracy** in brain tumor classification.
-""")
-st.info("Architecture: Lorentzian ViT + MedGemma Clinical Reasoning Engine")
+    # Analysis
+    heatmap, pred_idx, conf = get_gradcam(vision_engine, input_tensor)
+    label = ['glioma', 'meningioma', 'no_tumor', 'pituitary'][pred_idx]
 
-# Sidebar
-st.sidebar.header("User Control")
-uploaded_file = st.sidebar.file_uploader("Upload T1-weighted MRI Scan", type=['jpg', 'jpeg', 'png'])
-
-# Execution logic
-vision_engine = load_vision_engine()
-
-if uploaded_file and vision_engine:
     # Layout
     col1, col2 = st.columns([1, 1])
-    
-    # Load and process image
-    img = Image.open(uploaded_file).convert('RGB')
-    input_tensor = preprocess_image(img)
-    
+
     with col1:
-        st.subheader("🖼️ Vision & Localization")
-        st.image(img, caption="Patient MRI (T1-weighted)", use_column_width=True)
+        st.subheader("🖼️ Localization & XAI")
+        # Tabs for better visualization
+        tab_orig, tab_cam = st.tabs(["Original MRI", "Explainable AI (Heatmap)"])
         
-        # Perform Inference
-        with torch.no_grad():
-            output = vision_engine(input_tensor)
-            probabilities = F.softmax(output, dim=1)
-            confidence, predicted_idx = torch.max(probabilities, 1)
-            
-        class_names = ['glioma', 'meningioma', 'no_tumor', 'pituitary']
-        label = class_names[predicted_idx.item()]
-        conf_score = confidence.item() * 100
+        with tab_orig:
+            st.image(raw_img, use_column_width=True)
         
-        # Display classification result
-        st.success(f"**DIAGNOSIS: {label.upper()}**")
-        st.metric(label="AI Confidence", value=f"{conf_score:.2f}%")
+        with tab_cam:
+            img_np = np.array(raw_img.resize((224, 224)))
+            heatmap_color = cv2.applyColorMap(np.uint8(255 * heatmap), cv2.COLORMAP_JET)
+            overlay = cv2.addWeighted(img_np, 0.6, heatmap_color, 0.4, 0)
+            st.image(overlay, use_column_width=True)
+            st.caption("Red regions indicate primary diagnostic focus points.")
 
     with col2:
-        st.subheader("📜 Expert Clinical Report")
-        with st.spinner("Analyzing findings..."):
-            # Fetch reasoning from the expert bank
-            report_text = get_clinical_report(label, conf_score)
-            
-            st.markdown(f"### Diagnostic Summary")
-            st.write(report_text)
-            
-            st.markdown("---")
-            st.warning("**Disclaimer:** This is an AI-assisted tool for research purposes. All findings must be verified by a board-certified radiologist.")
+        st.subheader("📊 Diagnostic Metrics")
+        m1, m2 = st.columns(2)
+        m1.metric("Diagnosis", label.upper())
+        m2.metric("Confidence", f"{conf*100:.2f}%")
 
+        st.markdown("### 📜 Clinical Reasoning")
+        st.info(get_report(label))
+        
+        st.markdown("### 🧬 Architecture Insights")
+        st.write("""
+            The **HexFormer** localized this pathology using non-Euclidean geometry. 
+            By mapping the MRI features onto a **Lorentzian manifold**, the system 
+            is able to capture hierarchical tumor boundaries more effectively than standard CNNs.
+        """)
+        
 else:
-    st.write("---")
-    st.write("Please upload an MRI scan in the sidebar to begin analysis.")
-
-# Footer
-st.sidebar.markdown("---")
-st.sidebar.write(f"**Researcher:** Karan Sanjay Rathod")
-st.sidebar.write("**Model Accuracy:** 96.6%")
-st.sidebar.write("**Geometry:** Hyperbolic (Lorentzian)")
+    # Empty state visuals
+    st.markdown("### 🚀 Welcome to MedSight-Hex")
+    st.write("Please upload an MRI file from the sidebar to begin the Hyperbolic analysis.")
