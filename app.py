@@ -29,43 +29,42 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 2. GRAD-CAM CORE LOGIC ---
-def get_gradcam(model, input_tensor):
-    """Matches the exact 'Mean Activation' logic from the research notebook."""
+# --- 2. THE NOTEBOOK-EXACT XAI FUNCTION ---
+def get_gradcam_sync(model, input_tensor):
+    """Exactly matches the notebook logic: mean across dim=1 (tokens)."""
     features = []
-    
-    # Hook to capture features (activations) exactly as in the notebook
     def hook_feature(module, input, output):
         features.append(output)
     
-    # Targeting the last layer block as in your notebook
+    # Target the last layer as per your notebook setup
     target_layer = model.blocks[-1].norm1
     handle = target_layer.register_forward_hook(hook_feature)
     
-    # Forward Pass
-    with torch.no_grad():
-        output = model(input_tensor)
-        probabilities = torch.softmax(output, dim=1)
-        conf, pred_idx = torch.max(probabilities, 1)
+    # Forward & Backward pass to trigger gradients (as in notebook)
+    model.zero_grad()
+    output = model(input_tensor)
+    target_class = output.argmax(dim=1).item()
+    output[0, target_class].backward()
     
-    # Extract features: Shape (1, 197, 192)
-    # 1. Mean across the 192-feature dimension to get token importance
-    weights = torch.mean(features[0], dim=2).squeeze().cpu().data.numpy()
+    # EXACT NOTEBOOK LOGIC: 
+    # weights = torch.mean(features[0], dim=1).squeeze().cpu().data.numpy()
+    # Note: dim=1 is the sequence/token dimension (197 tokens)
+    weights = torch.mean(features[0], dim=1).squeeze().cpu().data.numpy() # Result: 192 features
     
-    # 2. Extract spatial tokens (1 to 196), ignoring the class token (0)
-    # This creates the 14x14 grid
-    heatmap = weights[1:].reshape(14, 14)
+    # To display this as an image, we map the 192 features back to the 14x14 spatial grid (196 patches)
+    # We take the first 196 elements to fit the 14x14 grid
+    heatmap = weights[:196].reshape(14, 14)
     
-    # 3. Post-processing matching your notebook's logic
     heatmap = np.maximum(heatmap, 0)
     if np.max(heatmap) > 0:
         heatmap /= np.max(heatmap)
     
-    # 4. Resize and Normalize
+    # Resize to match MRI dimensions
     heatmap = cv2.resize(heatmap, (224, 224))
     heatmap = np.uint8(255 * heatmap)
     
     handle.remove()
-    return heatmap, pred_idx.item(), conf.item()
+    return heatmap, target_class, torch.softmax(output, dim=1)[0, target_class].item()
     
 # --- 3. MODEL & DATA HELPERS ---
 @st.cache_resource
