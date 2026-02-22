@@ -7,6 +7,11 @@ from model_architecture import get_medsight_hex_model
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from huggingface_hub import login
 
+# --- INITIALIZE VARIABLES  ---
+vision_engine = None
+m_tokenizer = None
+medgemma = None
+
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="MedSight-Hex", layout="wide", page_icon="🧠")
 CLASS_NAMES = ['glioma', 'meningioma', 'no_tumor', 'pituitary']
