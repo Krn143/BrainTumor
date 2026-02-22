@@ -30,14 +30,14 @@ st.markdown("""
 
 # --- 2. GRAD-CAM CORE LOGIC ---
 def get_gradcam(model, input_tensor):
-    """Calculates the heatmaps for the Lorentzian Vision Transformer."""
+    """Calculates heatmaps specifically for the 192-dim HexFormer architecture."""
     activations = []
     gradients = []
 
     def save_activation(module, input, output): activations.append(output)
     def save_gradient(module, grad_input, grad_output): gradients.append(grad_output[0])
 
-    # Target the final normalization layer
+    # Target the last transformer block's normalization layer
     target_layer = model.blocks[-1].norm1
     h_a = target_layer.register_forward_hook(save_activation)
     h_g = target_layer.register_full_backward_hook(save_gradient)
@@ -47,28 +47,27 @@ def get_gradcam(model, input_tensor):
     _, pred_idx = torch.max(output, 1)
     output[:, pred_idx].backward()
 
-    # Process gradients and activations for ViT visualization
-    grads = gradients[0].cpu().data.numpy() # Shape: (1, Seq_Len, Dim)
-    acts = activations[0].cpu().data.numpy()  # Shape: (1, Seq_Len, Dim)
-    
+    # Get data and remove hooks immediately
+    grads = gradients[0].cpu().data.numpy() # (1, 197, 192)
+    acts = activations[0].cpu().data.numpy()  # (1, 197, 192)
     h_a.remove()
     h_g.remove()
 
-    # ViT Fix: Remove the class token (usually index 0) and reshape
-    # Sequence length for 224x224 images with 16x16 patches is 14x14=196 (+1 class token)
-    weights = np.mean(grads, axis=2) # Average over the feature dimension
-    
-    # We ignore the class token (index 0) and take the rest (196 patches)
-    cam_weights = weights[0, 1:] 
-    cam_acts = acts[0, 1:, :] 
-    
-    # Weight the activations
-    cam = np.dot(cam_acts, cam_weights)
-    
-    # Reshape the 196 patches back into a 14x14 grid
+    # 1. Average the gradients across the 197 tokens to get 192 weights
+    # This matches the 192 feature dimension of your ViT-Tiny
+    weights = np.mean(grads[0], axis=0) 
+
+    # 2. Ignore the class token (index 0) to get the 196 spatial patches
+    spatial_acts = acts[0, 1:, :] # Shape: (196, 192)
+
+    # 3. Multiply (196, 192) by (192,) to get (196,)
+    cam = np.dot(spatial_acts, weights)
+
+    # 4. Reshape the 196 patches into a 14x14 grid
     cam = cam.reshape(14, 14)
 
-    cam = np.maximum(cam, 0) # ReLU
+    # 5. Normalize for visualization
+    cam = np.maximum(cam, 0) # ReLU to keep only positive influence
     cam = cv2.resize(cam, (224, 224))
     cam = (cam - np.min(cam)) / (np.max(cam) - np.min(cam) + 1e-10)
     
