@@ -30,59 +30,48 @@ st.markdown("""
 
 # --- 2. GRAD-CAM CORE LOGIC ---
 def get_gradcam(model, input_tensor):
-    """Refined for Transformer localization to match notebook precision."""
-    features = []
+    """Calculates heatmaps specifically for the 192-dim HexFormer architecture."""
+    activations = []
     gradients = []
 
-    def hook_feature(module, input, output):
-        features.append(output)
-    
-    def hook_gradient(module, grad_input, grad_output):
-        gradients.append(grad_output[0])
+    def save_activation(module, input, output): activations.append(output)
+    def save_gradient(module, grad_input, grad_output): gradients.append(grad_output[0])
 
     # Target the last transformer block's normalization layer
-    # For ViT architectures, this usually provides the best spatial context
     target_layer = model.blocks[-1].norm1
-    
-    handle_f = target_layer.register_forward_hook(hook_feature)
-    handle_g = target_layer.register_full_backward_hook(hook_gradient)
+    h_a = target_layer.register_forward_hook(save_activation)
+    h_g = target_layer.register_full_backward_hook(save_gradient)
 
-    # Pass through model
     model.zero_grad()
     output = model(input_tensor)
-    target_class = output.argmax(dim=1).item()
-    output[0, target_class].backward()
+    _, pred_idx = torch.max(output, 1)
+    output[:, pred_idx].backward()
 
-    # 1. Get the spatial features (excluding CLS token)
-    # Shape of features[0]: [1, 197, 192] -> we want [196, 192]
-    acts = features[0][0, 1:, :] 
-    
-    # 2. Get the gradients (importance of each feature)
-    grads = gradients[0][0, 1:, :]
-    
-    # 3. Calculate weights (global average pooling of gradients)
-    weights = torch.mean(grads, dim=0) # Mean across tokens
-    
-    # 4. Compute Weighted Sum of Activations
-    cam = torch.matmul(acts, weights) # Resulting shape: (196,)
-    
-    # 5. Reshape to 14x14 grid
-    heatmap = cam.reshape(14, 14).detach().cpu().numpy()
-    
-    # 6. Apply ReLU and Normalize
-    heatmap = np.maximum(heatmap, 0)
-    if np.max(heatmap) > 0:
-        heatmap = heatmap / np.max(heatmap)
-    
-    # 7. Upscale and convert to uint8
-    heatmap = cv2.resize(heatmap, (224, 224))
-    heatmap = np.uint8(255 * heatmap)
+    # Get data and remove hooks immediately
+    grads = gradients[0].cpu().data.numpy() # (1, 197, 192)
+    acts = activations[0].cpu().data.numpy()  # (1, 197, 192)
+    h_a.remove()
+    h_g.remove()
 
-    handle_f.remove()
-    handle_g.remove()
+    # 1. Average the gradients across the 197 tokens to get 192 weights
+    # This matches the 192 feature dimension of your ViT-Tiny
+    weights = np.mean(grads[0], axis=0) 
+
+    # 2. Ignore the class token (index 0) to get the 196 spatial patches
+    spatial_acts = acts[0, 1:, :] # Shape: (196, 192)
+
+    # 3. Multiply (196, 192) by (192,) to get (196,)
+    cam = np.dot(spatial_acts, weights)
+
+    # 4. Reshape the 196 patches into a 14x14 grid
+    cam = cam.reshape(14, 14)
+
+    # 5. Normalize for visualization
+    cam = np.maximum(cam, 0) # ReLU to keep only positive influence
+    cam = cv2.resize(cam, (224, 224))
+    cam = (cam - np.min(cam)) / (np.max(cam) - np.min(cam) + 1e-10)
     
-    confidence = torch.softmax(output, dim=1)[0, target_class].item()
-    return heatmap, target_class, confidence
+    return cam, pred_idx.item(), torch.softmax(output, dim=1)[0, pred_idx].item()
 
 # --- 3. MODEL & DATA HELPERS ---
 @st.cache_resource
