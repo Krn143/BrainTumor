@@ -5,6 +5,7 @@ import cv2
 from PIL import Image
 from torchvision import transforms
 import torch.nn.functional as F
+import time
 
 # Import your custom architecture
 from model_architecture import get_medsight_hex_model
@@ -92,6 +93,81 @@ def get_report(label):
     }
     return reports.get(label, "Consult a specialist.")
 
+
+def call_medgemma_api(pred_label: str, conf_score: float, mode_simulated: bool = True):
+    """Return a MedGemma-style expert summary and a patient-friendly summary.
+
+    This function is currently a simulated/local fallback that returns prewritten
+    outputs for each class. Replace the implementation with an actual Vertex AI
+    or Hugging Face `generate` call in production. Example pseudocode is shown
+    in the docstring for easy replacement.
+
+    Example replacement (pseudocode):
+        # build prompt from pred_label and conf_score
+        response = vertex_ai.generate_text(prompt)
+        return response['expert'], response['patient_friendly']
+    """
+
+    # Simulate network latency for realism
+    if mode_simulated:
+        time.sleep(0.6)
+
+    expert_templates = {
+        "glioma": (
+            "Expert Summary: The model predicts Glioma with "
+            f"{conf_score*100:.2f}% confidence. Imaging features localize to "
+            "the cerebral hemisphere with heterogeneous signal and patchy enhancement. "
+            "Recommend expedited neurosurgical evaluation and contrast MRI for surgical planning."
+        ),
+        "meningioma": (
+            "Expert Summary: The model predicts Meningioma with "
+            f"{conf_score*100:.2f}% confidence. Appearance is extra-axial and dural-based, "
+            "often showing homogeneous enhancement. Recommend contrast-enhanced MRI and "
+            "neurosurgical consultation for resection planning."
+        ),
+        "pituitary": (
+            "Expert Summary: The model predicts a Pituitary lesion with "
+            f"{conf_score*100:.2f}% confidence. Lesion is centered in the sellar region; "
+            "suggest endocrine panel and dedicated pituitary MRI with contrast."
+        ),
+        "no_tumor": (
+            "Expert Summary: No tumor detected (model confidence "
+            f"{conf_score*100:.2f}%). Findings are within expected normal limits for this sequence. "
+            "Correlate clinically and consider follow-up imaging if symptoms persist."
+        ),
+    }
+
+    patient_templates = {
+        "glioma": (
+            "Patient Summary: The scan appears consistent with a type of brain tumor called a glioma. "
+            "This means there is an area the model highlights that should be reviewed by a neurosurgeon. "
+            "Next steps typically include further MRI with contrast and referral to a specialist."
+        ),
+        "meningioma": (
+            "Patient Summary: The image likely shows a meningioma, a usually slow-growing tumor "
+            "on the brain's surface. Doctors often confirm this with a contrast scan and discuss "
+            "treatment options such as monitoring or surgery."
+        ),
+        "pituitary": (
+            "Patient Summary: The scan suggests a small growth in the pituitary gland. "
+            "Your care team will typically check hormone levels and order focused imaging to guide next steps."
+        ),
+        "no_tumor": (
+            "Patient Summary: No clear tumor was identified on this image. If you have symptoms, "
+            "your doctor may recommend monitoring or additional tests, but there are no urgent findings here."
+        ),
+    }
+
+    expert = expert_templates.get(pred_label, "Expert Summary: Consult a specialist for further review.")
+    patient = patient_templates.get(pred_label, "Patient Summary: Consult your clinician for interpretation.")
+
+    # Annotate that this is a simulated/local response when mode_simulated is True
+    if mode_simulated:
+        expert = "[SIMULATED MedGemma] " + expert
+        patient = "[SIMULATED MedGemma] " + patient
+
+    return expert, patient
+
 # --- 4. SIDEBAR & RESEARCHER PROFILE ---
 with st.sidebar:
     st.markdown(f"""
@@ -107,6 +183,9 @@ with st.sidebar:
     
     st.header("📂 Data Input")
     uploaded_file = st.file_uploader("Upload MRI Scan (T1-weighted)", type=['jpg', 'png', 'jpeg'])
+    st.markdown("---")
+    st.subheader("MedGemma Integration")
+    simulated_mode = st.checkbox("Use simulated MedGemma (local templates)", value=True, help="When checked the app returns prewritten MedGemma-style outputs locally. Replace with Vertex AI call for production.")
     st.markdown("---")
     st.write("🔧 **Backend:** Hyperbolic Lorentzian ViT")
 
@@ -151,9 +230,15 @@ if uploaded_file:
         m1, m2 = st.columns(2)
         m1.metric("Diagnosis", label.upper())
         m2.metric("Confidence", f"{conf*100:.2f}%")
-
         st.markdown("### 📜 Clinical Reasoning")
-        st.info(get_report(label))
+        # Call the MedGemma API (simulated or true integration)
+        expert_report, patient_report = call_medgemma_api(label, conf, mode_simulated=simulated_mode)
+
+        st.subheader("Expert Summary (MedGemma)")
+        st.info(expert_report)
+
+        st.subheader("Patient-friendly Summary")
+        st.info(patient_report)
         
         st.markdown("### 🧬 Architecture Insights")
         st.write("""
