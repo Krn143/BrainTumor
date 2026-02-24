@@ -11,7 +11,7 @@ import time
 from model_architecture import get_medsight_hex_model
 
 # --- 1. PAGE CONFIG & ADVANCED UI STYLING ---
-st.set_page_config(page_title="MedSight-Hex | Clinical Dashboard", layout="wide", page_icon="🧠")
+st.set_page_config(page_title="MedSight-ViT | Clinical Dashboard", layout="wide", page_icon="🧠")
 
 # Custom CSS for a professional "Medical Tech" look
 st.markdown("""
@@ -31,7 +31,7 @@ st.markdown("""
 
 # --- 2. GRAD-CAM CORE LOGIC ---
 def get_gradcam(model, input_tensor):
-    """Calculates heatmaps specifically for the 192-dim HexFormer architecture."""
+    """Calculates heatmaps specifically for the 192-dim Transformer architecture."""
     activations = []
     gradients = []
 
@@ -174,10 +174,10 @@ with st.sidebar:
         <div class="researcher-card">
             <h3 style='margin:0; color:#60a5fa;'>👨‍🔬 Researcher</h3>
             <p style='margin:0; font-size:1.1em;'><b>Karan Sanjay Rathod</b></p>
-            <p style='margin:0; font-size:0.8em; opacity:0.8;'>BE Computer Engineering</p>
+            <p style='margin:0; font-size:0.8em; opacity:0.8;'>BE Computer Engineering (SPPU)</p>
             <hr style='margin:10px 0; border-color:#3b82f6;'>
-            <p style='margin:0; font-size:0.9em;'><b>Project:</b> MedSight-Hex</p>
-            <p style='margin:0; font-size:0.9em;'><b>Accuracy:</b> 96.6%</p>
+            <p style='margin:0; font-size:0.9em;'><b>Project:</b> MedSight-ViT</p>
+            <p style='margin:0; font-size:0.9em;'><b>Accuracy:</b> 94.6%</p>
         </div>
     """, unsafe_allow_html=True)
     
@@ -187,7 +187,55 @@ with st.sidebar:
     st.subheader("MedGemma Integration")
     simulated_mode = st.checkbox("Use simulated MedGemma (local templates)", value=True, help="When checked the app returns prewritten MedGemma-style outputs locally. Replace with Vertex AI call for production.")
     st.markdown("---")
-    st.write("🔧 **Backend:** Hyperbolic Lorentzian ViT")
+    
+    # Code Generation & Repository Information
+    with st.expander("ℹ️ About This Project"):
+        st.write("""
+        ### MedSight-Hex: Transformer-based Brain Tumor Classification
+        
+        **Project Overview:**
+        This application implements a Vision Transformer (ViT) pipeline for 
+        multi-class brain tumor classification using T1-weighted MRI scans. The system 
+        combines explainable AI (Grad-CAM) and clinical text generation for actionable insights.
+        
+        **Key Components:**
+        - **Vision Backbone:** ViT-Tiny (vit_tiny_patch16_224) with ImageNet pretraining
+        - **Training Strategy:** Two-stage fine-tuning (head → selective block unfreezing)
+        - **Explainability:** Adapted Grad-CAM for transformer patch representations
+        - **Clinical Output:** Simulated MedGemma integration (production-ready template)
+        
+        **Dataset:**
+        - BRISC 2025 classification challenge (https://www.kaggle.com/datasets/briscdataset/brisc2025)
+        - 4 classes: Glioma, Meningioma, Pituitary, No Tumor
+        - Train/Val/Test split with deduplication
+        
+        **Performance:**
+        - Validation Accuracy: 94.6% 
+        - Class-balanced sampling via WeightedRandomSampler
+        - Early stopping with patience=5
+        
+        **Code & References:**
+        - Model Training: braintumor-classification.ipynb
+        - Streamlit App: app.py (this file)
+        - Libraries: PyTorch, TIMM, Hugging Face Transformers, Streamlit
+        
+        **Important Note on MedGemma:**
+        Due to exhausted cloud API credits, the MedGemma text-generation integration 
+        uses **simulated local templates** during demonstration. These templates are based 
+        on expected neuroradiological descriptions for each tumor class and match the output 
+        structure of the real MedGemma API. For production deployment, replace the 
+        `call_medgemma_api()` function in app.py with a real Vertex AI or Hugging Face 
+        Inference API call (see docstring for pseudocode example).
+        
+        **Disclaimer:**
+        Automated model outputs are intended to **assist, not replace** expert clinical 
+        interpretation. This is a proof-of-concept system requiring prospective clinical 
+        validation, regulatory approval, and integration into clinical workflows before 
+        deployment.
+        """)
+    
+    st.markdown("---")
+    st.write("🔧 **Backend:** Vision Transformer + Hyperbolic Geometry (Conceptual)")
 
 # --- 5. MAIN DASHBOARD ---
 vision_engine = load_vision_engine()
@@ -242,12 +290,46 @@ if uploaded_file:
         
         st.markdown("### 🧬 Architecture Insights")
         st.write("""
-            The **HexFormer** localized this pathology using non-Euclidean geometry. 
-            By mapping the MRI features onto a **Lorentzian manifold**, the system 
-            is able to capture hierarchical tumor boundaries more effectively than standard CNNs.
+        #### MedSight-ViT: Vision Transformer Design
+        
+        **Backbone & Transfer Learning:**
+        The Transformer pipeline employs a Vision Transformer (ViT-Tiny, 192-dim embeddings, 12 blocks) 
+        pretrained on ImageNet. Transfer learning dramatically reduces the data requirements and 
+        accelerates convergence on the small BRISC2025 dataset compared to training from scratch.
+        
+        **Two-Stage Training Strategy:**
+        1. **Stage 1 (Head Training):** Freeze the transformer backbone and train only the custom 
+           classifier head (192 → 256 → ReLU → Dropout(0.5) → 4 classes) for 20–50 epochs. This 
+           preserves pretrained features while adapting to the tumor classification task.
+        2. **Stage 2 (Fine-tuning):** Unfreeze the last two transformer blocks (blocks.10, blocks.11) 
+           and apply differential learning rates—head at 1e-3, blocks at 1e-5—to enable conservative 
+           domain-specific refinement without catastrophic forgetting.
+        
+        **Class Imbalance Mitigation:**
+        A WeightedRandomSampler ensures approximately balanced minibatches despite class imbalance in the dataset.
+        
+        **Regularization & Optimization:**
+        - **Loss:** Cross-entropy with label smoothing (ε=0.1) during fine-tuning for better calibration.
+        - **Optimizer:** AdamW (decoupled weight decay) at different learning rates per stage.
+        - **Schedule:** Cosine annealing learning-rate decay (T_max=50) for smooth convergence.
+        - **Early Stopping:** Patience=5 on validation loss to prevent overfitting.
+        
+        **Explainability (Adapted Grad-CAM for ViT):**
+        Instead of convolutional feature maps, we extract gradients and activations from the final 
+        transformer norm layer, aggregate across 197 tokens to get 192 weights, apply these weights 
+        to the 196 spatial patch activations, reshape to 14×14, and upsample to 224×224 for overlay. 
+        This provides clinician-interpretable heatmaps showing which image regions the model attended to.
+        
+        **Clinical Text Generation (MedGemma):**
+        Model predictions and confidence are converted into expert-style and patient-friendly textual 
+        summaries via templated prompts. The system is designed to integrate with production APIs 
+        (Vertex AI, Hugging Face) for real-time report generation.
+        
+        ✅ **Result:** 94.6% validation accuracy with robust, interpretable, and clinician-actionable outputs.
         """)
+        
         
 else:
     # Empty state visuals
-    st.markdown("### 🚀 Welcome to MedSight-Hex")
-    st.write("Please upload an MRI file from the sidebar to begin the Hyperbolic analysis.")
+    st.markdown("### 🚀 Welcome to MedSight-ViT")
+    st.write("Please upload an MRI file from the sidebar to begin the Brain MRI analysis.")
