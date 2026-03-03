@@ -28,5 +28,9 @@ class HexFormerLorentzHead(nn.Module):
 def get_medsight_hex_model(num_classes=4):
     # Initializing the base ViT as per your notebook
     model = timm.create_model('vit_tiny_patch16_224', pretrained=True)
-    model.head = HexFormerLorentzHead(model.num_features, num_classes)
+    model.head = nn.Sequential(
+    nn.Linear(model.num_features, 256),
+    nn.ReLU(),
+    nn.Dropout(0.5),
+    nn.Linear(256, num_classes)
     return model
