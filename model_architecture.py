@@ -32,5 +32,5 @@ def get_medsight_hex_model(num_classes=4):
     nn.Linear(model.num_features, 256),
     nn.ReLU(),
     nn.Dropout(0.5),
-    nn.Linear(256, num_classes)
+    nn.Linear(256, num_classes) )
     return model
